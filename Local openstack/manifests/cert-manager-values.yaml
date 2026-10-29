@@ -1,0 +1,15 @@
+###############################################################################
+# cert-manager Helm Values
+# Custom values for cert-manager installation.
+# Uses waitInsteadOfSelfCheck in ClusterIssuer solvers to skip internal
+# DNS self-checks, decoupling cert-manager from recursive nameservers.
+###############################################################################
+
+# Install CRDs as part of the Helm release
+crds:
+  enabled: true
+
+# Enable verbose logging for debugging challenge issues
+# Level 2 provides detailed solver and challenge info
+global:
+  logLevel: 2

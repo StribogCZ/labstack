@@ -1,0 +1,76 @@
+###############################################################################
+# Test Application
+# A simple HTTP echo server used to verify the full certificate chain:
+#   CZERTAINLY → cert-manager → acme-dns → Istio Gateway → this app
+#
+# The app responds with a static message on port 5678.
+# The Service exposes it on port 8080 (matching the VirtualService config).
+###############################################################################
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: default
+  labels:
+    app: my-app
+    app.kubernetes.io/name: my-app
+    app.kubernetes.io/part-of: acme-lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+        - name: http-echo
+          image: hashicorp/http-echo
+          args:
+            - "-text=Hello from app.lab.local with ACME cert from CZERTAINLY!"
+          ports:
+            - containerPort: 5678
+              name: http
+          resources:
+            limits:
+              memory: "64Mi"
+              cpu: "50m"
+            requests:
+              memory: "32Mi"
+              cpu: "25m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5678
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5678
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+---
+# Service: expose the test app on port 8080 → container port 5678
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app-service
+  namespace: default
+  labels:
+    app: my-app
+    app.kubernetes.io/name: my-app-service
+    app.kubernetes.io/part-of: acme-lab
+spec:
+  selector:
+    app: my-app
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 5678
+      protocol: TCP

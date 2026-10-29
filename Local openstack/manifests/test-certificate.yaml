@@ -1,0 +1,39 @@
+###############################################################################
+# Test Certificate
+# Requests a TLS certificate for app.lab.local
+# from the CZERTAINLY ACME ClusterIssuer.
+#
+# The certificate is stored in istio-system namespace so that the
+# Istio IngressGateway can mount it for HTTPS termination.
+#
+# Duration: 90 days (2160h)
+# Renewal: 15 days before expiry (360h renewBefore)
+###############################################################################
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: app-tls-certificate
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: app-tls-certificate
+    app.kubernetes.io/part-of: acme-lab
+spec:
+  # Secret where the issued certificate + private key will be stored
+  # Istio Gateway references this secret by name
+  secretName: app-tls-credential
+
+  # Certificate validity duration (90 days)
+  duration: 2160h    # 90d
+
+  # Begin renewal 15 days before expiry
+  renewBefore: 360h  # 15d
+
+  # Reference the CZERTAINLY ACME ClusterIssuer
+  issuerRef:
+    name: czertainly-acme
+    kind: ClusterIssuer
+    group: cert-manager.io
+
+  # Requested DNS names
+  dnsNames:
+    - app.lab.local

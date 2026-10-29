@@ -1,0 +1,59 @@
+###############################################################################
+# CZERTAINLY ACME ClusterIssuer (External Proxmox VE Instance)
+#
+# This ClusterIssuer connects cert-manager (inside OpenStack K8s) to the
+# CZERTAINLY platform running externally in a Proxmox VE (PVE) LXC container.
+#
+# Flow:
+#   1. cert-manager requests a certificate from CZERTAINLY's ACME server
+#   2. CZERTAINLY issues a DNS-01 challenge
+#   3. cert-manager calls the acme-dns webhook to create the TXT record
+#   4. The webhook updates acme-dns via its API
+#   5. CZERTAINLY verifies the TXT record via DNS
+#   6. Certificate is issued and stored as a Kubernetes Secret
+###############################################################################
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: czertainly-acme
+  labels:
+    app.kubernetes.io/name: czertainly-acme
+    app.kubernetes.io/part-of: acme-lab
+spec:
+  acme:
+    # CZERTAINLY ACME directory URL on OpenStack VM czertainly-ca
+    server: http://czertainly.lab.local:8000/api/v1/protocols/acme/lab-profile/directory
+
+    # Contact email for ACME account notifications
+    email: admin@lab.local
+
+    # Secret to store the ACME account private key
+    # cert-manager generates this automatically on first use
+    privateKeySecretRef:
+      name: czertainly-acme-account-key
+
+    # Optional: If CZERTAINLY uses a self-signed or internal CA certificate,
+    # supply the base64-encoded PEM CA certificate here (automatically populated
+    # when running ./07-deploy-czertainly.sh):
+    # caBundle: <BASE64_ENCODED_CA_CRT>
+
+    # External Account Binding (EAB)
+    # Uncomment and fill in if your CZERTAINLY ACME profile requires EAB:
+    # externalAccountBinding:
+    #   keyID: "REPLACE_WITH_EAB_KEY_ID"
+    #   keySecretRef:
+    #     name: czertainly-eab-secret
+    #     key: secret
+    #   keyAlgorithm: HS256
+
+    # DNS-01 solver configuration using cert-manager's native acmeDNS solver
+    solvers:
+      - dns01:
+          cnameStrategy: Follow
+          acmeDNS:
+            host: http://acme-dns.acme-dns.svc.cluster.local
+            accountSecretRef:
+              name: acme-dns
+              key: acmedns.json
+        # Skip internal DNS self-check and wait 10s for propagation before ACME validation
+        waitInsteadOfSelfCheck: 10s

@@ -1,0 +1,232 @@
+###############################################################################
+# acme-dns Kubernetes Deployment
+# Deploys the acme-dns server for ACME DNS-01 challenge delegation.
+# acme-dns acts as a limited DNS server that only handles TXT records
+# needed for ACME DNS-01 validation, allowing cert-manager to automate
+# certificate issuance without giving it full DNS control.
+###############################################################################
+
+---
+# Namespace: isolate acme-dns resources
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acme-dns
+  labels:
+    app.kubernetes.io/name: acme-dns
+    app.kubernetes.io/part-of: acme-lab
+
+---
+###############################################################################
+# ConfigMap: acme-dns configuration
+# This is the main config file for acme-dns. The WORKER_IP placeholder
+# will be replaced by the deployment script with the actual worker node IP.
+###############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acme-dns-config
+  namespace: acme-dns
+  labels:
+    app.kubernetes.io/name: acme-dns
+data:
+  config.cfg: |
+    [general]
+    # Listen on all interfaces, port 53
+    listen = "0.0.0.0:53"
+    # Support both UDP and IPv4 DNS queries
+    protocol = "both4"
+    # The domain that acme-dns is authoritative for
+    domain = "auth.acmedns.lab.local"
+    # NS record name for acme-dns
+    nsname = "auth.acmedns.lab.local"
+    # SOA admin contact (@ replaced with .)
+    nsadmin = "admin.acmedns.lab.local"
+    # Built-in DNS records
+    # A record: resolve auth.acmedns.lab.local to the worker node IP
+    records = [
+        "auth.acmedns.lab.local. A WORKER_IP",
+        "auth.acmedns.lab.local. NS auth.acmedns.lab.local."
+    ]
+    debug = true
+
+    [database]
+    # SQLite database for storing ACME DNS records (v2.0+ uses "sqlite")
+    engine = "sqlite"
+    connection = "/var/lib/acme-dns/acme-dns.db"
+
+    [api]
+    # API server configuration — used by cert-manager webhook to update TXT records
+    ip = "0.0.0.0"
+    port = "80"
+    # Allow new account registrations (required for initial setup)
+    disable_registration = false
+    # TLS is handled externally (by Kubernetes / Istio), so disable here
+    tls = "none"
+
+    [logconfig]
+    # Debug-level logging to stdout for easy kubectl logs inspection
+    loglevel = "debug"
+    logtype = "stdout"
+
+---
+###############################################################################
+# Deployment: acme-dns server
+# Runs the acme-dns container with config and persistent data volumes.
+###############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acme-dns
+  namespace: acme-dns
+  labels:
+    app.kubernetes.io/name: acme-dns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: acme-dns
+  template:
+    metadata:
+      labels:
+        app: acme-dns
+        app.kubernetes.io/name: acme-dns
+    spec:
+      containers:
+        - name: acme-dns
+          image: joohoi/acme-dns:v2.0.2
+          ports:
+            # DNS UDP port
+            - containerPort: 53
+              protocol: UDP
+              name: dns-udp
+            # DNS TCP port (for large responses / zone transfers)
+            - containerPort: 53
+              protocol: TCP
+              name: dns-tcp
+            # HTTP API port (registration + TXT record updates)
+            - containerPort: 80
+              protocol: TCP
+              name: http-api
+          resources:
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+          volumeMounts:
+            # Mount the configuration file
+            - name: config
+              mountPath: /etc/acme-dns
+              readOnly: true
+            # Mount persistent data directory for SQLite database
+            - name: data
+              mountPath: /var/lib/acme-dns
+          livenessProbe:
+            tcpSocket:
+              port: 53
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        # Config volume from ConfigMap
+        - name: config
+          configMap:
+            name: acme-dns-config
+        # PersistentVolumeClaim for SQLite database
+        - name: data
+          persistentVolumeClaim:
+            claimName: acme-dns-pvc
+
+---
+###############################################################################
+# PersistentVolumeClaim: acme-dns SQLite database storage
+###############################################################################
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: acme-dns-pvc
+  namespace: acme-dns
+  labels:
+    app.kubernetes.io/name: acme-dns
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+###############################################################################
+# Service (ClusterIP): internal access to acme-dns
+# Used by cert-manager's native acmeDNS solver to reach the acme-dns API.
+###############################################################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: acme-dns
+  namespace: acme-dns
+  labels:
+    app.kubernetes.io/name: acme-dns
+spec:
+  type: ClusterIP
+  selector:
+    app: acme-dns
+  ports:
+    # DNS over UDP
+    - name: dns-udp
+      port: 53
+      targetPort: 53
+      protocol: UDP
+    # DNS over TCP
+    - name: dns-tcp
+      port: 53
+      targetPort: 53
+      protocol: TCP
+    # HTTP API
+    - name: http-api
+      port: 80
+      targetPort: 80
+      protocol: TCP
+
+---
+###############################################################################
+# Service (NodePort): external access to acme-dns
+# Exposes acme-dns DNS and API on fixed NodePorts so that Designate and
+# external clients can reach it from outside the cluster.
+###############################################################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: acme-dns-external
+  namespace: acme-dns
+  labels:
+    app.kubernetes.io/name: acme-dns
+spec:
+  type: NodePort
+  selector:
+    app: acme-dns
+  ports:
+    # DNS over UDP — exposed on NodePort 30053
+    - name: dns-udp
+      port: 53
+      targetPort: 53
+      protocol: UDP
+      nodePort: 30053
+    # DNS over TCP — exposed on NodePort 30053
+    - name: dns-tcp
+      port: 53
+      targetPort: 53
+      protocol: TCP
+      nodePort: 30053
+    # HTTP API — exposed on NodePort 30080
+    - name: http-api
+      port: 80
+      targetPort: 80
+      protocol: TCP
+      nodePort: 30080
